@@ -1,6 +1,8 @@
 package com.example.textautoclick
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -12,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -117,7 +120,7 @@ private fun ExpandedPanel(
             Text(lastStatus, color = GreyDark, fontSize = 11.sp)
             if (detecting) {
                 Text(
-                    "panel hidden while detecting — tap logo bubble to stop",
+                    "tap bubble to reopen · stop from here",
                     color = GreyDark, fontSize = 10.sp
                 )
             }
@@ -125,20 +128,35 @@ private fun ExpandedPanel(
     }
 }
 
-/** Small floating logo — the only "dismissed" state. Tap = expand. Draggable. */
+/** Small floating logo — the only "dismissed" state. Tap = expand. Draggable.
+ *  Manual tap-vs-drag: detectDragGestures eats the tap, so we split them by
+ *  movement threshold in a single gesture handler. */
 @Composable
 private fun MinimizedLogo(onExpand: () -> Unit, onDragBy: (Int, Int) -> Unit) {
     Surface(
         shape = CircleShape,
         color = WhiteSurface,
         shadowElevation = 8.dp,
-        onClick = onExpand,
         modifier = Modifier
             .size(56.dp)
             .pointerInput(Unit) {
-                detectDragGestures { change, drag ->
-                    change.consume()
-                    onDragBy(drag.x.toInt(), drag.y.toInt())
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    var dragged = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val ch = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (ch.changedToUp()) {
+                            if (!dragged) onExpand()
+                            break
+                        }
+                        val drag = ch.positionChange()
+                        if (dragged || drag.getDistance() > 16f) {
+                            dragged = true
+                            ch.consume()
+                            onDragBy(drag.x.toInt(), drag.y.toInt())
+                        }
+                    }
                 }
             }
     ) {

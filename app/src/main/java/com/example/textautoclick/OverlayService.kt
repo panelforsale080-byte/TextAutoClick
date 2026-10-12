@@ -106,7 +106,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     onKeywordChange = { keyword.value = it },
                     onToggleDetection = { toggleDetection() },
                     onMinimize = { minimized.value = true },
-                    onExpand = { if (!detecting.value) minimized.value = false },
+                    onExpand = { minimized.value = false },
                     onFieldFocus = { focused -> setFocusable(focused) },
                     onDragBy = { dx, dy ->
                         params.x += dx; params.y += dy
@@ -128,15 +128,27 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
         overlayView = view
     }
 
-    /** Keyboard fix: overlay windows start NOT_FOCUSABLE so touches pass to apps below;
-     *  flip focusable ONLY while the keyword field is focused so the IME appears. */
+    /** Keyboard fix: overlay windows start NOT_FOCUSABLE so touches pass to apps below.
+     *  Flip focusable + NOT_TOUCH_MODAL while the keyword field is focused, then
+     *  explicitly showSoftInput (flipping flags alone does NOT attach the IME). */
     private fun setFocusable(focused: Boolean) {
         val v = overlayView ?: return
         params.flags = if (focused)
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            (params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()) or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         else
-            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            (params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) and
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL.inv()
         try { windowManager.updateViewLayout(v, params) } catch (_: Throwable) {}
+        if (focused) {
+            v.post {
+                try {
+                    val imm = getSystemService(INPUT_METHOD_SERVICE)
+                            as android.view.inputmethod.InputMethodManager
+                    imm.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                } catch (_: Throwable) {}
+            }
+        }
     }
 
     /** Screen rect (capture pixels = screen * SCALE) occupied by our own overlay —
@@ -207,13 +219,16 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     val kw = keyword.value.trim().lowercase()
                     recognizer.process(InputImage.fromBitmap(bitmap, 0))
                         .addOnSuccessListener { text ->
-                            // line-level matching: tighter boxes for small button text
+                            // FUZZY line-level matching: normalize both sides (lowercase,
+                            // letters/digits only) so "Click Me", "click me", "CLICK ME"
+                            // and "Click me Owdbsiwowwkek" all match keyword "click me".
+                            val normKw = normalize(kw)
                             val self = selfRect()
-                            val hit = text.textBlocks.asSequence()
+                            val hit = if (normKw.isEmpty()) null else text.textBlocks.asSequence()
                                 .flatMap { it.lines.asSequence() }
                                 .firstOrNull { line ->
                                     val box = line.boundingBox ?: return@firstOrNull false
-                                    line.text.lowercase().contains(kw) && !Rect.intersects(box, self)
+                                    normalize(line.text).contains(normKw) && !Rect.intersects(box, self)
                                 }
                             if (hit != null) {
                                 hitsSeen.value += 1
@@ -235,6 +250,10 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
             delay(POLL_MS)
         }
     }
+
+    /** Lowercase + letters/digits only — "Click Me" -> "clickme". */
+    private fun normalize(s: String): String =
+        s.lowercase().filter { it.isLetterOrDigit() }
 
     /** Handles row-stride padding AND crops back to the true frame size. */
     private fun imageToBitmapCropped(image: android.media.Image): Bitmap? {
