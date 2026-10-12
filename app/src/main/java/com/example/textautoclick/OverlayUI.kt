@@ -146,7 +146,7 @@ private fun MinimizedLogo(onExpand: () -> Unit, onDragBy: (Int, Int) -> Unit) {
                     while (true) {
                         val event = awaitPointerEvent()
                         val ch = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (ch.changedToUp()) {
+                        if (!ch.pressed) {   // pointer lifted
                             if (!dragged) onExpand()
                             break
                         }
