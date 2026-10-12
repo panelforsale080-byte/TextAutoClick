@@ -18,6 +18,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 
 val GreyBg = Color(0xFFE0E0E0)
 val GreyDark = Color(0xFF9E9E9E)
@@ -92,14 +93,32 @@ private fun ExpandedPanel(
                 Text("Text AutoClick", color = DarkText, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
 
-            OutlinedTextField(
-                value = keyword,
-                onValueChange = onKeywordChange,
-                label = { Text("text to tap", fontSize = 11.sp) },
-                singleLine = true,
+            // Plain EditText in an AndroidView — overlay windows attach the IME
+            // reliably to View-based fields (Compose OutlinedTextField does not
+            // on some ROMs). Same approach that worked in Test001.
+            AndroidView(
+                factory = { ctx ->
+                    android.widget.EditText(ctx).apply {
+                        setText(keyword)
+                        hint = "text to tap (e.g. click me)"
+                        textSize = 14f
+                        setTextColor(0xFF333333.toInt())
+                        setHintTextColor(0xFF9E9E9E.toInt())
+                        setSingleLine(true)
+                        setPadding(24, 8, 24, 8)
+                        setOnFocusChangeListener { _, has -> onFieldFocus(has) }
+                        addTextChangedListener(object : android.text.TextWatcher {
+                            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                            override fun afterTextChanged(s: android.text.Editable?) {
+                                onKeywordChange(s?.toString() ?: "")
+                            }
+                        })
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { onFieldFocus(it.isFocused) }
+                    .background(GreyBg, RoundedCornerShape(8.dp))
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -104,8 +104,8 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     keyword = keyword.value,
                     lastStatus = lastStatus.value,
                     onKeywordChange = { keyword.value = it },
-                    onToggleDetection = { toggleDetection() },
-                    onMinimize = { minimized.value = true },
+                    onToggleDetection = { setFocusable(false); hideKeyboard(); toggleDetection() },
+                    onMinimize = { setFocusable(false); hideKeyboard(); minimized.value = true },
                     onExpand = { minimized.value = false },
                     onFieldFocus = { focused -> setFocusable(focused) },
                     onDragBy = { dx, dy ->
@@ -141,14 +141,24 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL.inv()
         try { windowManager.updateViewLayout(v, params) } catch (_: Throwable) {}
         if (focused) {
-            v.post {
+            v.postDelayed({
                 try {
                     val imm = getSystemService(INPUT_METHOD_SERVICE)
                             as android.view.inputmethod.InputMethodManager
-                    imm.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                    // SHOW_FORCED: overlay windows often ignore SHOW_IMPLICIT on XOS
+                    imm.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_FORCED)
                 } catch (_: Throwable) {}
-            }
+            }, 150)
         }
+    }
+
+    private fun hideKeyboard() {
+        val v = overlayView ?: return
+        try {
+            val imm = getSystemService(INPUT_METHOD_SERVICE)
+                    as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(v.windowToken, 0)
+        } catch (_: Throwable) {}
     }
 
     /** Screen rect (capture pixels = screen * SCALE) occupied by our own overlay —
@@ -199,6 +209,10 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
             if (!AutoClickAccessibilityService.isRunning()) {
                 lastStatus.value = "enable accessibility first"; return
             }
+            // make sure the window is NOT focusable while detecting — a focusable
+            // overlay blocks ALL touches to apps below (that was the stuck-screen bug)
+            setFocusable(false)
+            hideKeyboard()
             detecting.value = true
             hitsSeen.value = 0
             // CRITICAL: hide the panel — otherwise OCR reads our own TextField
