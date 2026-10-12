@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Text AutoClick</string>
+    <string name="accessibility_service_description">Simulates taps when configured on-screen text is detected.</string>
+</resources>
