@@ -58,6 +58,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
     private val detecting = mutableStateOf(false)
     private val keyword = mutableStateOf("Click Me")
     private val lastStatus = mutableStateOf("idle")
+    private val hitsSeen = mutableStateOf(0)
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -105,7 +106,8 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     onKeywordChange = { keyword.value = it },
                     onToggleDetection = { toggleDetection() },
                     onMinimize = { minimized.value = true },
-                    onExpand = { minimized.value = false },
+                    onExpand = { if (!detecting.value) minimized.value = false },
+                    onFieldFocus = { focused -> setFocusable(focused) },
                     onDragBy = { dx, dy ->
                         params.x += dx; params.y += dy
                         try { windowManager.updateViewLayout(overlayView, params) } catch (_: Throwable) {}
@@ -124,6 +126,28 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
         ).apply { gravity = Gravity.TOP or Gravity.START; x = 80; y = 160 }
         windowManager.addView(view, params)
         overlayView = view
+    }
+
+    /** Keyboard fix: overlay windows start NOT_FOCUSABLE so touches pass to apps below;
+     *  flip focusable ONLY while the keyword field is focused so the IME appears. */
+    private fun setFocusable(focused: Boolean) {
+        val v = overlayView ?: return
+        params.flags = if (focused)
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        else
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        try { windowManager.updateViewLayout(v, params) } catch (_: Throwable) {}
+    }
+
+    /** Screen rect (capture pixels = screen * SCALE) occupied by our own overlay —
+     *  OCR hits inside it are OUR panel text, never tap them. */
+    private fun selfRect(): Rect {
+        val v = overlayView ?: return Rect()
+        val loc = IntArray(2); v.getLocationOnScreen(loc)
+        return Rect(
+            (loc[0] * SCALE).toInt(), (loc[1] * SCALE).toInt(),
+            ((loc[0] + v.width) * SCALE).toInt(), ((loc[1] + v.height) * SCALE).toInt()
+        )
     }
 
     // ---------- MediaProjection ----------
@@ -156,6 +180,7 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
         if (detecting.value) {
             detectionJob?.cancel(); detectionJob = null
             detecting.value = false
+            minimized.value = false   // bring the panel back when stopping
             lastStatus.value = "stopped"
         } else {
             if (mediaProjection == null) { lastStatus.value = "grant screen capture first"; return }
@@ -163,7 +188,11 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                 lastStatus.value = "enable accessibility first"; return
             }
             detecting.value = true
-            lastStatus.value = "watching '${keyword.value}'…"
+            hitsSeen.value = 0
+            // CRITICAL: hide the panel — otherwise OCR reads our own TextField
+            // showing the keyword and self-taps in a loop.
+            minimized.value = true
+            lastStatus.value = "watching '${keyword.value}'… (panel hidden)"
             detectionJob = serviceScope.launch { detectionLoop() }
         }
     }
@@ -178,18 +207,26 @@ class OverlayService : LifecycleService(), SavedStateRegistryOwner, ViewModelSto
                     val kw = keyword.value.trim().lowercase()
                     recognizer.process(InputImage.fromBitmap(bitmap, 0))
                         .addOnSuccessListener { text ->
-                            val now = System.currentTimeMillis()
-                            if (kw.isEmpty() || now - lastTapAt < COOLDOWN_MS) return@addOnSuccessListener
-                            val hit = text.textBlocks.firstOrNull {
-                                it.text.lowercase().contains(kw)
-                            }
-                            val box = hit?.boundingBox
-                            if (box != null) {
+                            // line-level matching: tighter boxes for small button text
+                            val self = selfRect()
+                            val hit = text.textBlocks.asSequence()
+                                .flatMap { it.lines.asSequence() }
+                                .firstOrNull { line ->
+                                    val box = line.boundingBox ?: return@firstOrNull false
+                                    line.text.lowercase().contains(kw) && !Rect.intersects(box, self)
+                                }
+                            if (hit != null) {
+                                hitsSeen.value += 1
+                                val now = System.currentTimeMillis()
+                                if (now - lastTapAt < COOLDOWN_MS) return@addOnSuccessListener
+                                val box = hit.boundingBox ?: return@addOnSuccessListener
                                 val ok = AutoClickAccessibilityService.instance
                                     ?.performClick(box.exactCenterX() / SCALE, box.exactCenterY() / SCALE)
                                     ?: false
                                 lastTapAt = now
                                 lastStatus.value = "tapped '${hit.text}' ok=$ok"
+                            } else {
+                                lastStatus.value = "scanning… no match for '${keyword.value}'"
                             }
                         }
                         .addOnFailureListener { lastStatus.value = "ocr error" }

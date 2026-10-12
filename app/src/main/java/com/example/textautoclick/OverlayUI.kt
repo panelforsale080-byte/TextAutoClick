@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -31,14 +32,15 @@ fun OverlayUI(
     onToggleDetection: () -> Unit,
     onMinimize: () -> Unit,
     onExpand: () -> Unit,
-    onDragBy: (Int, Int) -> Unit
+    onDragBy: (Int, Int) -> Unit,
+    onFieldFocus: (Boolean) -> Unit
 ) {
     if (minimized) {
         MinimizedLogo(onExpand = onExpand, onDragBy = onDragBy)
     } else {
         ExpandedPanel(
             detecting, keyword, lastStatus,
-            onKeywordChange, onToggleDetection, onMinimize, onDragBy
+            onKeywordChange, onToggleDetection, onMinimize, onDragBy, onFieldFocus
         )
     }
 }
@@ -51,7 +53,8 @@ private fun ExpandedPanel(
     onKeywordChange: (String) -> Unit,
     onToggleDetection: () -> Unit,
     onMinimize: () -> Unit,
-    onDragBy: (Int, Int) -> Unit
+    onDragBy: (Int, Int) -> Unit,
+    onFieldFocus: (Boolean) -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -91,7 +94,9 @@ private fun ExpandedPanel(
                 onValueChange = onKeywordChange,
                 label = { Text("text to tap", fontSize = 11.sp) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { onFieldFocus(it.isFocused) }
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -110,6 +115,12 @@ private fun ExpandedPanel(
             }
 
             Text(lastStatus, color = GreyDark, fontSize = 11.sp)
+            if (detecting) {
+                Text(
+                    "panel hidden while detecting — tap logo bubble to stop",
+                    color = GreyDark, fontSize = 10.sp
+                )
+            }
         }
     }
 }
